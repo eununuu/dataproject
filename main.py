@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as op
+import plotly.graph_objects as go
 
 # 1. 페이지 설정 및 제목
 st.set_page_config(page_title="서울 기온 트렌드 분석기", layout="wide")
@@ -15,20 +15,24 @@ st.markdown("""
 # 2. 데이터 로드 및 전처리 함수
 @st.cache_data
 def load_data():
-    # 파일 읽기 (첫 행의 공백이나 탭 제거 및 인코딩 설정)
-    df = pd.read_csv('ta_20260601093156.csv', encoding='cp949')
+    # 파일 인코딩을 'utf-8-sig'로 변경하여 에러 수정 및 BOM 제거
+    df = pd.read_csv('ta_20260601093156.csv', encoding='utf-8-sig')
     
     # 컬럼명 정제 (공백 제거)
     df.columns = df.columns.str.strip()
     
-    # '날짜' 컬럼의 탭 문자(\t) 제거 후 데이트타임 변환
-    df['날짜'] = df['날짜'].astype(str).str.replace(r'\s+', '', regex=True)
+    # '날짜' 컬럼의 탭 문자(\t) 및 따옴표 제거 후 데이트타임 변환
+    df['날짜'] = df['날짜'].astype(str).str.replace(r'[\s"\t]+', '', regex=True)
     df['날짜'] = pd.to_datetime(df['날짜'])
     
     # 연도 컬럼 추출
     df['연도'] = df['날짜'].dt.year
     
-    # 연도별 평균 기온 계산 (결측치는 제외)
+    # 기온 데이터 숫자형 변환 및 결측치 제거
+    df['평균기온(℃)'] = pd.to_numeric(df['평균기온(℃)'], errors='coerce')
+    df = df.dropna(subset=['평균기온(℃)'])
+    
+    # 연도별 평균 기온 계산
     yearly_df = df.groupby('연도')['평균기온(℃)'].mean().reset_index()
     return yearly_df
 
@@ -37,10 +41,10 @@ try:
     
     # 3. 사이드바 - 분석 기준점 설정
     st.sidebar.header("📊 분석 설정")
-    split_year = st.sidebar.slider("트렌드 분기 연도 선택", min_value=1950, max_value=2000, value=1980, step=5)
+    split_year = st.sidebar.slider("트렌드 분기 연도 선택", min_value=1950, max_value=2010, value=1980, step=5)
     
     # 데이터 분할
-    df_before = data[data['연o'] < split_year]
+    df_before = data[data['연도'] < split_year]
     df_after = data[data['연도'] >= split_year]
     
     # 4. 주요 지표 (Metrics) 시각화
@@ -49,19 +53,19 @@ try:
     temp_diff = mean_after - mean_before
     
     col1, col2, col3 = st.columns(3)
-    col1.metric(label=r"이전 평균 기온", value=f"{mean_before:.2f} °C")
-    col2.metric(label=r"이후 평균 기온", value=f"{mean_after:.2f} °C")
-    col3.metric(label=r"평균 기온 상승 폭", value=f"+{temp_diff:.2f} °C", delta=f"{temp_diff:.2f} °C")
+    col1.metric(label="이전 평균 기온", value=f"{mean_before:.2f} °C")
+    col2.metric(label="이후 평균 기온", value=f"{mean_after:.2f} °C")
+    col3.metric(label="평균 기온 상승 폭", value=f"+{temp_diff:.2f} °C", delta=f"{temp_diff:.2f} °C")
     
     st.markdown("---")
     
     # 5. 시각화 (Plotly) - 추세선 그리기
     st.subheader(f"📈 {split_year}년 전후 기온 추세선 비교")
     
-    fig = op.Figure()
+    fig = go.Figure()
     
     # 전체 실제 데이터 산점도
-    fig.add_trace(op.Scatter(
+    fig.add_trace(go.Scatter(
         x=data['연도'], y=data['평균기온(℃)'],
         mode='markers', name='연평균 기온',
         marker=dict(color='gray', opacity=0.5)
@@ -70,20 +74,25 @@ try:
     # 분기 이전 추세선 계산 및 추가
     if len(df_before) > 1:
         slope_b, intercept_b = np.polyfit(df_before['연도'], df_before['평균기온(℃)'], 1)
-        fig.add_trace(op.Scatter(
+        fig.add_trace(go.Scatter(
             x=df_before['연도'], y=slope_b * df_before['연도'] + intercept_b,
             mode='lines', name=f'{split_year}년 이전 추세선 (기여도: {slope_b*10:.3f}°C/10년)',
             line=dict(color='blue', width=3)
         ))
+    else:
+        slope_b = 0
         
     # 분기 이후 추세선 계산 및 추가
     if len(df_after) > 1:
         slope_a, intercept_a = np.polyfit(df_after['연도'], df_after['평균기온(℃)'], 1)
-        fig.add_trace(op.Scatter(
-            x=df_after['연도'], y=slope_a * df_after['연도'] + intercept_a,
+        fig.add_trace(go.Scatter(
+            x=df_after['연度'] if '연度' in df_after else df_after['연도'], 
+            y=slope_a * df_after['연도'] + intercept_a,
             mode='lines', name=f'{split_year}년 이후 추세선 (기여도: {slope_a*10:.3f}°C/10년)',
             line=dict(color='red', width=3)
         ))
+    else:
+        slope_a = 0
         
     fig.update_layout(
         xaxis_title="연도",
@@ -99,9 +108,9 @@ try:
     rate_multiplier = (slope_a / slope_b) if slope_b != 0 else 0
     
     st.write(f"""
-    - **{split_year}년 이전**에는 10년마다 약 **{slope_b*10:.3f}°C**씩 상승하거나 변화했습니다.
+    - **{split_year}년 이전**에는 10년마다 약 **{slope_b*10:.3f}°C**씩 변화했습니다.
     - **{split_year}년 이후**에는 10년마다 약 **{slope_a*10:.3f}°C**씩 빠르게 상승하고 있습니다.
-    - {split_year}년 이후의 기온 상승 속도는 이전과 비교했을 때 약 **{rate_multiplier:.1f}배** 더 대조적입니다.
+    - {split_year}년 이후의 기온 상승 속도는 이전과 비교했을 때 약 **{rate_multiplier:.1f}배** 차이가 납니다.
     """)
     
 except FileNotFoundError:
